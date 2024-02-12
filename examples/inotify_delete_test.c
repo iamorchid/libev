@@ -52,7 +52,7 @@ int main() {
                 if (strcmp(event->name, "hello.txt") == 0) {
                     printf("The watched file was re-created.\n");
                     // Remove the old watch descriptor if needed, as it's no longer valid
-                    // inotify_rm_watch(inotifyFd, watchDescriptorFile);
+                    inotify_rm_watch(inotifyFd, watchDescriptorFile);
                     // Add a new watch for the new file
                     watchDescriptorFile = inotify_add_watch(inotifyFd, "/tmp/test/hello.txt", IN_DELETE_SELF | IN_MODIFY);
                     if (watchDescriptorFile < 0) {

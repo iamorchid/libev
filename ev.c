@@ -4889,13 +4889,13 @@ infy_wd (EV_P_ int slot, int wd, struct inotify_event *ev)
           if (w->wd == wd || wd == -1)
             {
               // ev->mask 包含了具体发生的文件事件类型. 如果一个文件删除后，再添加回来，之前的inotify
-              // watch descriptor将不再有效, 需要重新进行inotify_add_watch操作.
+              // watch 将不再有效, 需要重新进行inotify_add_watch操作.
               if (ev->mask & (IN_IGNORED | IN_UNMOUNT | IN_DELETE_SELF))
                 {
                   wlist_del (&fs_hash [slot & ((EV_INOTIFY_HASHSIZE) - 1)].head, (WL)w);
                   // [comment]
                   // 这里有些问题, 下面进行infy_add之前，应该也进行infy_del操作？否则, 存在
-                  // watch descriptor泄露的风险 ??
+                  // watch泄露的风险 ?? 这种情况下, watch会被自动清理.
                   w->wd = -1;
                   infy_add (EV_A_ w); /* re-add, no matter what */
                 }
@@ -5026,6 +5026,9 @@ infy_fork (EV_P)
 void
 ev_stat_stat (EV_P_ ev_stat *w) EV_NOEXCEPT
 {
+  // 对于不存在的文件, st_nlink一定会设置为0; 而对于已经存在的文件,
+  // st_nlink保证一定不为0. 对于文件反复删除和创建的情况, 通过这里
+  // 的stat信息可以感知到.
   if (lstat (w->path, &w->attr) < 0)
     w->attr.st_nlink = 0;
   else if (!w->attr.st_nlink)
@@ -5063,6 +5066,8 @@ stat_timer_cb (EV_P_ ev_timer *w_, int revents)
       #if EV_USE_INOTIFY
         if (fs_fd >= 0)
           {
+            // 这里可以看到, stat发生变化后, 这里会强制更新inotify watch. 
+            // 如果被watch的文件一直在写入, 这里的操作会不会过于频繁?
             infy_del (EV_A_ w);
             infy_add (EV_A_ w);
             ev_stat_stat (EV_A_ w); /* avoid race... */
