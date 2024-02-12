@@ -4832,6 +4832,17 @@ infy_add (EV_P_ ev_stat *w)
   if (w->wd >= 0)
     wlist_add (&fs_hash [w->wd & ((EV_INOTIFY_HASHSIZE) - 1)].head, (WL)w);
 
+  // [comment]
+  // 下面的逻辑不太好理解，但其本质上是为了避免内部timer watcher w->timer改变activecnt
+  // 的计数 (即避免内部watcher导致ev_run loop无法退出). ev_timer_again可能执行:
+  // 1) 变更timer的下次触发时间 (此时timer已经为active), 但不会变更activecnt
+  // 2) stop timer, 它会将timer从active置为非active, 并通过ev_unref减小activecnt
+  // 3) start timer, 它会将timer从非active置为active, 并通过ev_ref增加activecnt
+  // 而下面两个if语句, 可以保证上面三种情况下, activecnt都不变.
+  //
+  // 个人觉得这种操作过于晦涩, 简单点为watcher增加一个flag来表明是否为内部watcher, 如果
+  // 是内部watcher, 则跳过一些操作即可.
+  // 
   /* now re-arm timer, if required */
   if (ev_is_active (&w->timer)) ev_ref (EV_A);
   ev_timer_again (EV_A_ &w->timer);
