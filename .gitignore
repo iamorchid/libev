@@ -1,0 +1,15 @@
+.deps/
+.libs/
+.vscode/
+Makefile
+config.h
+config.log
+config.status
+ev.lo
+ev.o
+event.lo
+event.o
+libev.la
+libtool
+stamp-h1
+examples/*.out

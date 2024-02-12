@@ -2545,8 +2545,12 @@ fd_rearm_all (EV_P)
   for (fd = 0; fd < anfdmax; ++fd)
     if (anfds [fd].events)
       {
+        // [comment]
+        // 忽略fd之前已经注册的events, 即保证根据watcher订阅的events
+        // 信息, 为fd进行全量events注册.
         anfds [fd].events = 0;
         anfds [fd].emask  = 0;
+
         fd_change (EV_A_ fd, EV__IOFDSET | EV_ANFD_REIFY);
       }
 }
@@ -2768,8 +2772,14 @@ evpipe_init (EV_P)
 
       fd_intern (evpipe [1]);
 
+      // [comment]
+      // 这里初始化watcher pipe_w的fd, 另外, 它对应的callback为pipecb, 在
+      // loop_init中已经设置好了.
       ev_io_set (&pipe_w, evpipe [0] < 0 ? evpipe [1] : evpipe [0], EV_READ);
       ev_io_start (EV_A_ &pipe_w);
+
+      // [comment]
+      // pipe_w是一个内部watcher
       ev_unref (EV_A); /* watcher should not keep loop alive */
     }
 }
@@ -2785,10 +2795,17 @@ evpipe_write (EV_P_ EV_ATOMIC_T *flag)
   *flag = 1;
   ECB_MEMORY_FENCE_RELEASE; /* make sure flag is visible before the wakeup */
 
+  // [comment]
+  // 当pipe_write_skipped为1时, 表示pipe其实有event, 只不过没有写入到pipe中. 当ev_run
+  // 看到pipe_write_skipped为1时, 需要恢复pipe事件（即使用EV_CUSTOM）. 采用这个标识, 可
+  // 以避免不必要的pipe写入和后续的读取.
   pipe_write_skipped = 1;
 
   ECB_MEMORY_FENCE; /* make sure pipe_write_skipped is visible before we check pipe_write_wanted */
 
+  // [comment]
+  // ev_run进入block之前, 会将pipe_write_wanted设置为true, 
+  // 即希望能够通过pipe事件来将其唤醒.
   if (pipe_write_wanted)
     {
       int old_errno;
@@ -2985,8 +3002,10 @@ child_reap (EV_P_ int chain, int pid, int status)
 
   for (w = (ev_child *)childs [chain & ((EV_PID_HASHSIZE) - 1)]; w; w = (ev_child *)((WL)w)->next)
     {
-      if ((w->pid == pid || !w->pid)
-          && (!traced || (w->flags & 1)))
+      // [comment]
+      // w->pid 为0, 表示匹配所有的chid;
+      // w->flags & 1位true, 表示也关心stopped 或者 后者continued子进程
+      if ((w->pid == pid || !w->pid) && (!traced || (w->flags & 1)))
         {
           ev_set_priority (w, EV_MAXPRI); /* need to do it *now*, this *must* be the same prio as the signal watcher itself */
           w->rpid    = pid;
@@ -3018,8 +3037,11 @@ childcb (EV_P_ ev_signal *sw, int revents)
   ev_feed_event (EV_A_ (W)sw, EV_SIGNAL);
 
   child_reap (EV_A_ pid, pid, status);
-  if ((EV_PID_HASHSIZE) > 1)
-    child_reap (EV_A_ 0, pid, status); /* this might trigger a watcher twice, but feed_event catches that */
+  if ((EV_PID_HASHSIZE) > 1) {
+    /* this might trigger a watcher twice, but feed_event catches that */
+    // 有的watcher ev_child会关注所有的子进程, 即ev_child->pid为0
+    child_reap (EV_A_ 0, pid, status); 
+  }
 }
 
 #endif
@@ -3503,6 +3525,8 @@ loop_fork (EV_P)
   infy_fork (EV_A);
 #endif
 
+  // [comment]
+  // postfork != 2 表示什么含义？
   if (postfork != 2)
     {
       #if EV_USE_SIGNALFD
@@ -3715,6 +3739,9 @@ ev_default_loop (unsigned int flags) EV_NOEXCEPT
           ev_signal_init (&childev, childcb, SIGCHLD);
           ev_set_priority (&childev, EV_MAXPRI);
           ev_signal_start (EV_A_ &childev);
+
+          // [comment]
+          // childev为内部watcher
           ev_unref (EV_A); /* child watcher should not keep loop alive */
 #endif
         }
@@ -4160,6 +4187,10 @@ ev_run (EV_P_ int flags)
         pipe_write_wanted = 0; /* just an optimisation, no fence needed */
 
         ECB_MEMORY_FENCE_ACQUIRE;
+
+        // [comment]
+        // pipe_write_skipped为true, 表示async event没有写入到eventfd中, 即无法通过
+        // backend_poll来发现event, 此时需要manully来feed事件.
         if (pipe_write_skipped)
           {
             assert (("libev: pipe_w not active, but pipe not written", ev_is_active (&pipe_w)));
@@ -4279,6 +4310,9 @@ clear_pending (EV_P_ W w)
 {
   if (w->pending)
     {
+      // [comment]
+      // pending_w is a dummy prepare watcher, whose callback is 
+      // pendingcb which does nothing.
       pendings [ABSPRI (w)][w->pending - 1].w = (W)&pending_w;
       w->pending = 0;
     }
@@ -4828,6 +4862,7 @@ infy_wd (EV_P_ int slot, int wd, struct inotify_event *ev)
 {
   if (slot < 0)
     /* overflow, need to check for all hash slots */
+    // 可能发生overflow吗？
     for (slot = 0; slot < (EV_INOTIFY_HASHSIZE); ++slot)
       infy_wd (EV_A_ slot, wd, ev);
   else
@@ -4839,11 +4874,17 @@ infy_wd (EV_P_ int slot, int wd, struct inotify_event *ev)
           ev_stat *w = (ev_stat *)w_;
           w_ = w_->next; /* lets us remove this watcher and all before it */
 
+          // wd == -1 也是溢出导致? 这种情况应该也不可能
           if (w->wd == wd || wd == -1)
             {
+              // ev->mask 包含了具体发生的文件事件类型. 如果一个文件删除后，再添加回来，之前的inotify
+              // watch descriptor将不再有效, 需要重新进行inotify_add_watch操作.
               if (ev->mask & (IN_IGNORED | IN_UNMOUNT | IN_DELETE_SELF))
                 {
                   wlist_del (&fs_hash [slot & ((EV_INOTIFY_HASHSIZE) - 1)].head, (WL)w);
+                  // [comment]
+                  // 这里有些问题, 下面进行infy_add之前，应该也进行infy_del操作？否则, 存在
+                  // watch descriptor泄露的风险 ??
                   w->wd = -1;
                   infy_add (EV_A_ w); /* re-add, no matter what */
                 }
@@ -4911,6 +4952,8 @@ infy_init (EV_P)
       ev_io_init (&fs_w, infy_cb, fs_fd, EV_READ);
       ev_set_priority (&fs_w, EV_MAXPRI);
       ev_io_start (EV_A_ &fs_w);
+
+      // fs_w为内部watcher, 不应该妨碍loop退出
       ev_unref (EV_A);
     }
 }

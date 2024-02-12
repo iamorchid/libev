@@ -223,7 +223,10 @@ enum {
   EV_NONE     =            0x00, /* no events */
   EV_READ     =            0x01, /* ev_io detected read will not block */
   EV_WRITE    =            0x02, /* ev_io detected write will not block */
+
+  // 这个设置后, 会强制对fd是否关联到FD_SET进行处理
   EV__IOFDSET =            0x80, /* internal use only */
+
   EV_IO       =         EV_READ, /* alias for type-detection */
   EV_TIMER    =      0x00000100, /* timer timed out */
 #if EV_COMPAT3
