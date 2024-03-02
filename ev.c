@@ -2440,6 +2440,8 @@ fd_reify (EV_P)
       unsigned char o_events = anfd->events;
       unsigned char o_reify  = anfd->reify;
 
+      // 在进行内核相关结构同步之前, 先将anfd->reify置为0, 这样即是在下面执行
+      // 过程中, 发生了新的fd_change调用时, 总能保证新的change被注册.
       anfd->reify = 0;
 
       /*if (ecb_expect_true (o_reify & EV_ANFD_REIFY)) probably a deoptimisation */
@@ -2449,6 +2451,8 @@ fd_reify (EV_P)
           for (w = (ev_io *)anfd->head; w; w = (ev_io *)((WL)w)->next)
             anfd->events |= (unsigned char)w->events;
 
+          // 如果fd关联的events没有变化, 则这里不用进行backend_modify, 
+          // 这个操作比较昂贵（涉及系统调用）.
           if (o_events != anfd->events)
             o_reify = EV__IOFDSET; /* actually |= */
         }
@@ -2475,6 +2479,9 @@ fd_change (EV_P_ int fd, int flags)
   unsigned char reify = anfds [fd].reify;
   anfds [fd].reify = reify | flags;
 
+  // 同一个fd可能会关联到多个ev_io, 此时每个ev_io进行ev_io_start时, 都会调用
+  // fd_change函数. 当anfds[fd].reify不为0, 表示fd的reify操作（即决定是否要
+  // 更新内核结构相关的操作）已经处于调度中了.
   if (ecb_expect_true (!reify))
     {
       ++fdchangecnt;
@@ -2503,6 +2510,7 @@ fd_valid (int fd)
 #ifdef _WIN32
   return EV_FD_TO_WIN32_HANDLE (fd) != -1;
 #else
+  // 返回fd当前设置的flags（即O_APPEND, O_ASYNC, O_DIRECT, O_NOATIME, and O_NONBLOCK)
   return fcntl (fd, F_GETFD) != -1;
 #endif
 }
@@ -3813,6 +3821,8 @@ idle_reify (EV_P)
 
       for (pri = NUMPRI; pri--; )
         {
+          // 如果当前存在比idle优先级更高的pending事件, 
+          // 则跳过idle event的处理.
           if (pendingcnt [pri])
             break;
 
@@ -4098,6 +4108,7 @@ ev_run (EV_P_ int flags)
       if (ecb_expect_false (postfork))
         loop_fork (EV_A);
 
+      // 检察是否存在pending的fd变动 并 更新内核相关的结构来反映更新
       /* update fd-related kernel structures */
       fd_reify (EV_A);
 
@@ -4117,6 +4128,11 @@ ev_run (EV_P_ int flags)
 
         ECB_MEMORY_FENCE; /* make sure pipe_write_wanted is visible before we check for potential skips */
 
+        // [comment]
+        // 1. flags & EVRUN_NOWAIT为true, 表示用户不想等
+        // 2. idleall不为0, 表示用户当前对idle情况关注, 因此不用等待
+        // 3. activecnt不为0, 比较当前用户有注册过event（包括idle event）, 即用户关注了idle以为的event时，需要进行等到
+        // 4. pipe_write_skipped为true时, 表示当前存在async event, 但没有写入eventfd（即优化）, 则这里不用等待
         if (ecb_expect_true (!(flags & EVRUN_NOWAIT || idleall || !activecnt || pipe_write_skipped)))
           {
             waittime = EV_TS_CONST (MAX_BLOCKTIME);
@@ -4181,7 +4197,12 @@ ev_run (EV_P_ int flags)
         ++loop_count;
 #endif
         assert ((loop_done = EVBREAK_RECURSE, 1)); /* assert for side effect */
+
+        // [comment]
+        // 当有io事件触发时, backend_poll会提前返回, 并收集好相关fd的events
+        // 并放入到pendings集合中.
         backend_poll (EV_A_ waittime);
+
         assert ((loop_done = EVBREAK_CANCEL, 1)); /* assert for side effect */
 
         pipe_write_wanted = 0; /* just an optimisation, no fence needed */
@@ -4218,6 +4239,9 @@ ev_run (EV_P_ int flags)
         queue_events (EV_A_ (W *)checks, checkcnt, EV_CHECK);
 #endif
 
+      // 默认情况下, 执行函数ev_invoke_pending, 即按照priority顺序,
+      // 依次触发pendings集合中的events（即执行event回调）. 但默认的
+      // 函数可以被ev_set_invoke_pending_cb进行覆盖.
       EV_INVOKE_PENDING;
     }
   while (ecb_expect_true (
@@ -4895,7 +4919,7 @@ infy_wd (EV_P_ int slot, int wd, struct inotify_event *ev)
                   wlist_del (&fs_hash [slot & ((EV_INOTIFY_HASHSIZE) - 1)].head, (WL)w);
                   // [comment]
                   // 这里有些问题, 下面进行infy_add之前，应该也进行infy_del操作？否则, 存在
-                  // watch泄露的风险 ?? 这种情况下, watch会被自动清理.
+                  // watch泄露的风险 ?? 这种情况下, watch会被系统自动清理.
                   w->wd = -1;
                   infy_add (EV_A_ w); /* re-add, no matter what */
                 }
